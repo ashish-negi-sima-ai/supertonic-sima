@@ -29,6 +29,7 @@ def main() -> int:
         server = create_server(args.host, args.port, SpeechApplication(engine))
         server.daemon_threads = True
         print(f"listening=http://{args.host}:{args.port}/v1/speech", flush=True)
+        print(f"listener=http://{args.host}:{args.port}/listen", flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:

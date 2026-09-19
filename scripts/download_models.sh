@@ -3,22 +3,32 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${SUPERTONIC_REPO_ROOT:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
-APP_ROOT="${SUPERTONIC_APP_ROOT:-/media/nvme/supertonic-tts}"
+APP_ROOT="${SUPERTONIC_APP_ROOT:-${HOME}/supertonic-tts}"
 VENV="${APP_ROOT}/.venv"
-MODEL_ROOT="${APP_ROOT}/models"
+MODEL_ROOT="${SUPERTONIC_MODEL_ROOT:-${APP_ROOT}/models}"
+CACHE_ROOT="${SUPERTONIC_CACHE_ROOT:-${XDG_CACHE_HOME:-${HOME}/.cache}/supertonic-tts}"
 UPSTREAM_DIR="${MODEL_ROOT}/supertonic-3"
 COMPILED_DIR="${MODEL_ROOT}/supertonic-3-sima"
 
-export HF_HOME="${APP_ROOT}/hf-cache"
-export TMPDIR="${APP_ROOT}/tmp"
+export HF_HOME="${HF_HOME:-${CACHE_ROOT}/huggingface}"
+export TMPDIR="${TMPDIR:-${CACHE_ROOT}/tmp}"
 mkdir -p "${MODEL_ROOT}" "${HF_HOME}" "${TMPDIR}"
 
-if [[ ! -x "${VENV}/bin/hf" ]]; then
-  echo "Missing Hugging Face CLI in ${VENV}; run ${REPO_ROOT}/scripts/setup_devkit.sh" >&2
+HF_CLI="${SUPERTONIC_HF_CLI:-}"
+if [[ -z "${HF_CLI}" && -x "${VENV}/bin/hf" ]]; then
+  HF_CLI="${VENV}/bin/hf"
+fi
+if [[ -z "${HF_CLI}" ]] && command -v hf >/dev/null 2>&1; then
+  HF_CLI="$(command -v hf)"
+fi
+if [[ -z "${HF_CLI}" || ! -x "${HF_CLI}" ]]; then
+  echo \
+    "Missing Hugging Face CLI; set SUPERTONIC_HF_CLI or run ${REPO_ROOT}/scripts/setup_devkit.sh" \
+    >&2
   exit 2
 fi
 
-"${VENV}/bin/hf" download florianvoss/supertonic-3-sima \
+"${HF_CLI}" download florianvoss/supertonic-3-sima \
   supertonic_vector_field_sima_mpk.tar.gz \
   supertonic_vocoder_sima_bf16_mpk.tar.gz \
   supertonic_runtime_data.npz \
@@ -26,7 +36,7 @@ fi
   vocoder_bf16_manifest.json \
   --local-dir "${COMPILED_DIR}"
 
-"${VENV}/bin/hf" download Supertone/supertonic-3 \
+"${HF_CLI}" download Supertone/supertonic-3 \
   onnx/duration_predictor.onnx \
   onnx/text_encoder.onnx \
   onnx/vocoder.onnx \
