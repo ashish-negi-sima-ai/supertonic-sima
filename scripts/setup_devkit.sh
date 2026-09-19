@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_ROOT="${SUPERTONIC_APP_ROOT:-/media/nvme/supertonic-tts}"
+APP_ROOT="${SUPERTONIC_APP_ROOT:-${HOME}/supertonic-tts}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${SUPERTONIC_REPO_ROOT:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
+MODEL_ROOT="${SUPERTONIC_MODEL_ROOT:-${APP_ROOT}/models}"
+OUTPUT_ROOT="${SUPERTONIC_OUTPUT_ROOT:-${APP_ROOT}/output}"
+CACHE_ROOT="${SUPERTONIC_CACHE_ROOT:-${XDG_CACHE_HOME:-${HOME}/.cache}/supertonic-tts}"
 VENV="${APP_ROOT}/.venv"
 
-export HF_HOME="${APP_ROOT}/hf-cache"
-export PIP_CACHE_DIR="${APP_ROOT}/pip-cache"
-export TMPDIR="${APP_ROOT}/tmp"
+export HF_HOME="${HF_HOME:-${CACHE_ROOT}/huggingface}"
+export PIP_CACHE_DIR="${PIP_CACHE_DIR:-${CACHE_ROOT}/pip}"
+export TMPDIR="${TMPDIR:-${CACHE_ROOT}/tmp}"
 
 mkdir -p \
   "${APP_ROOT}" \
-  "${APP_ROOT}/output" \
-  "${APP_ROOT}/models" \
+  "${OUTPUT_ROOT}" \
+  "${MODEL_ROOT}" \
   "${HF_HOME}" \
   "${PIP_CACHE_DIR}" \
   "${TMPDIR}"
@@ -53,6 +56,7 @@ fi
 "${VENV}/bin/python" -m pip install --no-deps "${PYNEAT_WHEELS[0]}"
 
 SUPERTONIC_APP_ROOT="${APP_ROOT}" \
+  SUPERTONIC_MODEL_ROOT="${MODEL_ROOT}" \
   SUPERTONIC_REPO_ROOT="${REPO_ROOT}" \
   bash "${REPO_ROOT}/scripts/download_models.sh"
 
@@ -67,4 +71,5 @@ print(f"pyneat={getattr(pyneat, '__version__', 'unknown')}")
 PY
 
 echo "DevKit environment ready: ${VENV}"
-echo "Model assets ready: ${APP_ROOT}/models"
+echo "Model assets ready: ${MODEL_ROOT}"
+echo "Output directory ready: ${OUTPUT_ROOT}"

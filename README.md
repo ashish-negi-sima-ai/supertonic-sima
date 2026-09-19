@@ -34,25 +34,64 @@ requirements-devkit.txt
 ```
 
 Generated models, compiler output, reports, and audio belong under ignored
-workspace paths such as `build/`, `models/`, or `/media/nvme/supertonic-tts`.
+workspace paths such as `build/`, `models/`, or the configured application root.
 
-## DevKit setup
+## Fresh DevKit setup
 
 Run this repository on the DevKit. The script creates an isolated virtual
-environment under `/media/nvme/supertonic-tts`, downloads the matching PyNeat wheel with
-`sima-cli neat install core -t pyneat`, installs ONNX Runtime and PyNeat into
-that environment, and downloads the upstream CPU models plus compiled MLA
-models. An existing application environment is recreated to keep the install
-isolated and reproducible.
+environment under `${SUPERTONIC_APP_ROOT:-$HOME/supertonic-tts}`, downloads the
+matching PyNeat wheel with `sima-cli neat install core -t pyneat`, installs ONNX
+Runtime and PyNeat into that environment, and downloads the upstream CPU models
+plus compiled MLA models. An existing application environment is recreated to
+keep the install isolated and reproducible.
 
 ```bash
+export SUPERTONIC_APP_ROOT="$HOME/supertonic-tts"
 bash scripts/setup_devkit.sh
-source /media/nvme/supertonic-tts/.venv/bin/activate
+source "$SUPERTONIC_APP_ROOT/.venv/bin/activate"
 ```
 
-Override `SUPERTONIC_APP_ROOT` or `SUPERTONIC_REPO_ROOT` when the local DevKit
-paths differ. The DevKit must have `sima-cli` installed and configured to access
-the Neat artifacts.
+The scripts and Python runtime honor the same path configuration:
+
+- `SUPERTONIC_APP_ROOT` defaults to `$HOME/supertonic-tts`; a fresh setup puts
+  its virtual environment there.
+- `SUPERTONIC_MODEL_ROOT` defaults to `$SUPERTONIC_APP_ROOT/models`.
+- `SUPERTONIC_OUTPUT_ROOT` defaults to `$SUPERTONIC_APP_ROOT/output`.
+- `SUPERTONIC_CACHE_ROOT` defaults to
+  `${XDG_CACHE_HOME:-$HOME/.cache}/supertonic-tts` for setup and downloads.
+- `SUPERTONIC_REPO_ROOT` defaults to the repository containing the setup script.
+- `SUPERTONIC_HF_CLI` optionally selects an existing `hf` executable.
+
+Set paths to absolute values before setup and before launching an example. CLI
+path arguments still take precedence over the environment-derived defaults.
+The DevKit must have `sima-cli` configured only when performing the fresh setup
+that downloads PyNeat.
+
+### Reuse installed Neat and PyNeat
+
+When the board already has Neat and PyNeat, do not run `setup_devkit.sh`; that
+script deliberately recreates an isolated environment. Download the models
+directly instead. `download_models.sh` reuses `hf` from `PATH` (or
+`SUPERTONIC_HF_CLI`) and does not install or modify Neat or PyNeat.
+
+For the shared workspace on Modalix:
+
+```bash
+export SUPERTONIC_APP_ROOT=/workspace/GitHub/supertonic-sima
+export SUPERTONIC_MODEL_ROOT=/workspace/llima/models
+export SUPERTONIC_OUTPUT_ROOT="$HOME/supertonic-output"
+export SUPERTONIC_CACHE_ROOT="$HOME/.cache/supertonic-tts"
+cd "$SUPERTONIC_APP_ROOT"
+bash scripts/download_models.sh
+```
+
+Use the existing PyNeat interpreter for the application. If ONNX Runtime is
+not already present, install it once without reinstalling PyNeat:
+
+```bash
+source /home/sima/pyneat/bin/activate
+python -m pip install onnxruntime==1.22.1
+```
 
 ## Examples
 
@@ -62,7 +101,7 @@ measured runs reuse those objects.
 ```bash
 python app/examples/simple.py \
   --text "Hello from Modalix." --voice M1 --lang en \
-  --output /media/nvme/supertonic-tts/output/hello.wav
+  --output "${SUPERTONIC_OUTPUT_ROOT:-$SUPERTONIC_APP_ROOT/output}/hello.wav"
 ```
 
 The CLI prints audio length, generation time, real-time factor, latent length,
@@ -84,6 +123,10 @@ and starts playback as soon as the first chunk is ready while subsequent chunks
 are synthesized into the continuous Web Audio queue. Inter-chunk outputs have
 their generated trailing silence removed with a short retained tail and fade;
 the final chunk remains unchanged.
+
+If a chunk still exceeds the 192-frame latent-duration profile, the browser
+automatically splits only that chunk to a safer size and retries it before
+continuing the playback queue.
 
 The server logs each chunk's complete JSON-escaped text together with its
 position and split boundary, raw/processed lengths, synthesis settings, latent

@@ -90,6 +90,19 @@ function sentenceChunks(value,lang){
   return chunks;
 }
 
+function latentOverflowSplit(value,message){
+  const match=/predicted latent length (\d+) exceeds static limit (\d+)/iu.exec(message);
+  if(!match||value.length<=24)return null;
+  const predicted=Number(match[1]), limit=Number(match[2]);
+  const scale=Math.min(.75,limit/predicted*.9);
+  const targetChars=Math.min(
+    value.length-1,Math.max(24,Math.floor(value.length*scale))
+  );
+  const parts=splitLongSegment(value,targetChars);
+  if(parts.length<2)return null;
+  return {parts,predicted,limit,targetChars};
+}
+
 function splitBoundary(value,isFinal){
   const stripped=value.replace(/["\u0027”’)\]」』】〉》›»]+$/gu,'');
   const ending=stripped.slice(-1);
@@ -188,6 +201,25 @@ form.onsubmit=async e=>{
       if(!response.ok){
         let message=`HTTP ${response.status}`;
         try{message=(await response.json()).error||message}catch(_){}
+        const retry=response.status===400
+          ?latentOverflowSplit(chunks[index],message)
+          :null;
+        if(retry){
+          const original=chunks[index];
+          chunks.splice(index,1,...retry.parts);
+          console.warn('[Supertonic] chunk exceeded latent profile; re-splitting',{
+            index:index+1,
+            predictedLatentFrames:retry.predicted,
+            limit:retry.limit,
+            originalChars:original.length,
+            targetChars:retry.targetChars,
+            replacementChars:retry.parts.map(part=>part.length),
+            text:original
+          });
+          status.textContent=`Chunk ${index+1} exceeded the duration limit · splitting and retrying…`;
+          index-=1;
+          continue;
+        }
         throw new Error(message);
       }
       generationSeconds+=Number(response.headers.get('X-Generation-Length-Seconds'))||0;

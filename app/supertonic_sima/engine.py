@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -36,8 +37,15 @@ from .text import MAX_SPEED, MIN_SPEED, preprocess_text
 
 
 UPSTREAM_REVISION = "724fb5abbf5502583fb520898d45929e62f02c0b"
-DEFAULT_ASSET_ROOT = Path("/media/nvme/supertonic-tts/models")
-DEFAULT_OUTPUT_ROOT = Path("/media/nvme/supertonic-tts/output")
+DEFAULT_APP_ROOT = Path(
+    os.environ.get("SUPERTONIC_APP_ROOT") or Path.home() / "supertonic-tts"
+)
+DEFAULT_ASSET_ROOT = Path(
+    os.environ.get("SUPERTONIC_MODEL_ROOT") or DEFAULT_APP_ROOT / "models"
+)
+DEFAULT_OUTPUT_ROOT = Path(
+    os.environ.get("SUPERTONIC_OUTPUT_ROOT") or DEFAULT_APP_ROOT / "output"
+)
 BASE_PHYSICAL_INPUTS = (
     ("noisy_latent", (1, 144, 1, 192)),
     ("text_emb", (1, 256, 1, 192)),
