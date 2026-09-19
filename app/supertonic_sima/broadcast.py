@@ -8,7 +8,7 @@ import json
 from queue import Empty, Full, Queue
 from threading import Lock
 
-from .text import AVAILABLE_VOICES
+from .text import AVAILABLE_LANGUAGES, AVAILABLE_VOICES, MAX_SPEED, MIN_SPEED
 
 
 class AudioBroadcast:
@@ -20,35 +20,56 @@ class AudioBroadcast:
         self._generation = 0
         self._current: tuple[str, int] | None = None
         self._sequences: OrderedDict[str, int] = OrderedDict()
-        self._voice: str | None = None
-        self._response_voice: str | None = None
+        self._preferences: dict = {"voice": None, "language": None, "speed": None}
+        self._response_preferences = self._preferences.copy()
         self._settings_revision = 0
 
     def _settings(self) -> dict:
-        return {"voice": self._voice, "revision": self._settings_revision}
+        return {**self._preferences, "revision": self._settings_revision}
 
     @property
     def settings(self) -> dict:
         with self._lock:
             return self._settings()
 
-    def set_voice(self, voice: str | None) -> dict:
+    def update_settings(self, changes: dict) -> dict:
+        if not changes or changes.keys() - {"voice", "language", "speed"}:
+            raise ValueError("expected voice, language, or speed settings")
+        voice = changes.get("voice")
         if voice is not None and (not isinstance(voice, str) or voice not in AVAILABLE_VOICES):
             raise ValueError("voice must be F1–F5, M1–M5, or null for the Jarvic voice")
+        language = changes.get("language")
+        if language is not None and (
+            not isinstance(language, str) or language not in AVAILABLE_LANGUAGES
+        ):
+            raise ValueError("language must be a supported code or null for the Jarvic language")
+        speed = changes.get("speed")
+        if speed is not None and (
+            type(speed) not in (int, float) or not MIN_SPEED <= speed <= MAX_SPEED
+        ):
+            raise ValueError(
+                f"speed must be a number between {MIN_SPEED} and {MAX_SPEED} "
+                "or null for the Jarvic speed"
+            )
         with self._lock:
-            if voice != self._voice:
-                self._voice = voice
+            preferences = {**self._preferences, **changes}
+            if preferences != self._preferences:
+                self._preferences = preferences
                 self._settings_revision += 1
                 if self._current is None:
-                    self._response_voice = voice
+                    self._response_preferences = preferences.copy()
                 self._deliver(self._event("settings", self._settings()))
             return self._settings()
 
-    @property
-    def response_voice(self) -> str | None:
-        """The selected voice is held constant for all chunks of one response."""
+    def settings_for_response(self, generation: int) -> dict | None:
+        """Snapshot overrides for a current response, or reject an old generation."""
         with self._lock:
-            return self._response_voice
+            if generation != self._generation:
+                return None
+            return {
+                key: value for key, value in self._response_preferences.items()
+                if value is not None
+            }
 
     @property
     def generation(self) -> int:
@@ -66,7 +87,7 @@ class AudioBroadcast:
                 self._sequences.popitem(last=False)
             self._current = (stream_id, sequence)
             self._generation += 1
-            self._response_voice = self._voice
+            self._response_preferences = self._preferences.copy()
             event = self._event("interrupt", {
                 "generation": self._generation, "settings": self._settings(),
             })

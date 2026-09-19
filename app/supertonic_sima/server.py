@@ -51,16 +51,21 @@ class SpeechApplication:
         if not MIN_SPEED <= speed <= MAX_SPEED:
             raise ValueError(f"speed must be between {MIN_SPEED} and {MAX_SPEED}")
         with self.lock:
-            if generation is not None and generation != self.broadcast.generation:
-                raise SpeechSuperseded
             if generation is not None:
-                voice = self.broadcast.response_voice or voice
+                settings = self.broadcast.settings_for_response(generation)
+                if settings is None:
+                    raise SpeechSuperseded
+                voice = settings.get("voice", voice)
+                language = settings.get("language", language)
+                speed = settings.get("speed", speed)
             result = self.engine.synthesize(
                 text, voice=voice, language=language, speed=speed, seed=seed
             )
         body = wav_bytes(result.waveform, result.sample_rate)
         headers = {
             "X-Voice": voice,
+            "X-Language": language,
+            "X-Speed": str(speed),
             "X-Audio-Length-Seconds": f"{result.audio_seconds:.6f}",
             "X-Generation-Length-Seconds": f"{result.generation_seconds:.6f}",
             "X-Real-Time-Factor": f"{result.real_time_factor:.6f}",
@@ -122,7 +127,11 @@ def create_server(
                 self._listen()
             elif self.path == "/listen/settings":
                 self._json(HTTPStatus.OK, {
-                    **application.broadcast.settings, "voices": AVAILABLE_VOICES,
+                    **application.broadcast.settings,
+                    "voices": AVAILABLE_VOICES,
+                    "languages": sorted(AVAILABLE_LANGUAGES),
+                    "min_speed": MIN_SPEED,
+                    "max_speed": MAX_SPEED,
                 })
             elif self.path == "/config":
                 self._json(
@@ -194,9 +203,7 @@ def create_server(
                 if not isinstance(payload, dict):
                     raise ValueError("request body must be a JSON object")
                 if self.path == "/listen/settings":
-                    if set(payload) != {"voice"}:
-                        raise ValueError("expected a single 'voice' setting")
-                    self._json(HTTPStatus.OK, application.broadcast.set_voice(payload["voice"]))
+                    self._json(HTTPStatus.OK, application.broadcast.update_settings(payload))
                     return
                 if self.path == "/v1/speech/interrupt":
                     stream_id, sequence = payload.get("stream_id"), payload.get("sequence")
@@ -235,8 +242,8 @@ def create_server(
                 boundary = boundary.replace("\r", "").replace("\n", "")[:24]
                 self.log_message(
                     "synthesis start chunk=%s/%s boundary=%s "
-                    "raw_chars=%d source_chars=%s language=%s requested_voice=%s "
-                    "speed=%s seed=%s steps=%d text=%s",
+                    "raw_chars=%d source_chars=%s requested_language=%s requested_voice=%s "
+                    "requested_speed=%s seed=%s steps=%d text=%s",
                     chunk_index,
                     chunk_count,
                     boundary,
@@ -251,11 +258,13 @@ def create_server(
                 )
                 body, headers = application.synthesize(payload, generation=generation)
                 self.log_message(
-                    "synthesis done chunk=%s/%s voice=%s processed_chars=%s "
+                    "synthesis done chunk=%s/%s voice=%s language=%s speed=%s processed_chars=%s "
                     "latent_frames=%s audio_s=%s generation_s=%s rtf=%s",
                     chunk_index,
                     chunk_count,
                     headers["X-Voice"],
+                    headers["X-Language"],
+                    headers["X-Speed"],
                     headers["X-Text-Length"],
                     headers["X-Latent-Length"],
                     headers["X-Audio-Length-Seconds"],

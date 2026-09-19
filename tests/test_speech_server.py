@@ -27,10 +27,12 @@ class FakeEngine:
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.voices: list[str] = []
+        self.options: list[dict] = []
 
     def synthesize(self, text: str, **kwargs):
         self.calls.append(text)
         self.voices.append(kwargs["voice"])
+        self.options.append(kwargs)
         if text == "overflow":
             raise ValueError("predicted latent length 210 exceeds static limit 192")
         return SimpleNamespace(
@@ -290,30 +292,58 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(self.request("/v1/speech/interrupt", payload)[0], 400)
         self.assertEqual(self.app.broadcast.generation, 0)
 
-    def test_voice_settings_are_validated_and_shared_with_connected_listeners(self):
+    def test_speech_settings_are_validated_and_shared_with_connected_listeners(self):
         status, body, _ = self.request("/listen/settings")
         settings = json.loads(body)
         self.assertEqual(status, 200)
         self.assertIsNone(settings["voice"])
+        self.assertIsNone(settings["language"])
+        self.assertIsNone(settings["speed"])
+        self.assertIn("hi", settings["languages"])
+        self.assertIn("en", settings["languages"])
+        self.assertEqual((settings["min_speed"], settings["max_speed"]), (.7, 2.0))
         self.assertEqual(
             settings["voices"], [f"{gender}{index}" for gender in "FM" for index in range(1, 6)],
         )
         first, second = self.subscribe(), self.subscribe()
-        # Selecting a voice must not wait for current MLA inference to finish.
+        # Selecting settings must not wait for current MLA inference to finish.
         with self.app.lock:
-            status, body, _ = self.request("/listen/settings", {"voice": "F3"})
-        saved = {"voice": "F3", "revision": 1}
+            status, body, _ = self.request("/listen/settings", {
+                "voice": "F3", "language": "fr", "speed": 1.25,
+            })
+        saved = {"voice": "F3", "language": "fr", "speed": 1.25, "revision": 1}
         self.assertEqual((status, json.loads(body)), (200, saved))
         self.assertEqual(self.event(first), ("settings", saved))
         self.assertEqual(self.event(second), ("settings", saved))
         self.assertEqual(json.loads(self.request("/listen/settings")[1])["voice"], "F3")
         self.assertEqual(self.app.broadcast.generation, 0)
         self.assertEqual(self.engine.calls, [])
-        for invalid in ({"voice": "F6"}, {"voice": []}, {"voice": 1}, {}, {"voices": "M2"}):
-            self.assertEqual(self.request("/listen/settings", invalid)[0], 400)
-        self.assertEqual(self.app.broadcast.settings, saved)
+        for invalid in (
+            {"voice": "F6"}, {"voice": []}, {"voice": 1}, {}, {"voices": "M2"},
+            {"language": "xx"}, {"language": []}, {"language": True},
+            {"speed": .69}, {"speed": 2.01}, {"speed": True}, {"speed": "1.2"},
+            {"speed": []}, {"speed": float("inf")}, {"speed": float("nan")},
+            {"voice": "M2", "language": "de", "speed": 3},
+        ):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(self.request("/listen/settings", invalid)[0], 400)
+                self.assertEqual(self.app.broadcast.settings, saved)
 
-    def test_browser_voice_is_stable_per_response_and_can_restore_client_voice(self):
+    def test_partial_settings_updates_preserve_other_preferences_and_allow_speed_bounds(self):
+        self.request("/listen/settings", {"voice": "F1", "language": "de"})
+        for speed in (.7, 2, 1.25, None):
+            status, body, _ = self.request("/listen/settings", {"speed": speed})
+            saved = json.loads(body)
+            self.assertEqual(status, 200)
+            self.assertEqual(
+                (saved["voice"], saved["language"], saved["speed"]), ("F1", "de", speed),
+            )
+            # Repeating a setting does not increment its revision.
+            self.assertEqual(
+                json.loads(self.request("/listen/settings", {"speed": speed})[1]), saved,
+            )
+
+    def test_browser_settings_are_stable_per_response_and_can_restore_client_defaults(self):
         self.app.broadcast.subscribe()
 
         def start(sequence):
@@ -326,23 +356,36 @@ class ServerTests(unittest.TestCase):
         def chunk(generation, text, voice="M1"):
             self.assertEqual(self.request("/v1/speech/broadcast", {
                 "input": text, "generation": generation, "voice": voice,
+                "language": "es", "speed": 1.3,
             })[0], 200)
 
-        self.request("/listen/settings", {"voice": "F2"})
+        self.request("/listen/settings", {"voice": "F2", "language": "de", "speed": .8})
         first = start(1)
         chunk(first, "First chunk")
-        self.request("/listen/settings", {"voice": "M3"})
-        chunk(first, "Same response keeps its voice")
-        # An idempotent interrupt retry must not change a response's voice either.
+        self.request("/listen/settings", {"voice": "M3", "language": "hi", "speed": 1.6})
+        chunk(first, "Same response keeps its settings")
+        # An idempotent interrupt retry must not change a response's settings either.
         self.assertEqual(start(1), first)
-        chunk(first, "Still the same voice")
-        chunk(start(2), "Next response changes voice")
-        # Direct WAV requests (including the original GUI) keep their requested voice.
-        status, _, headers = self.request("/v1/speech", {"input": "Direct speech", "voice": "M5"})
-        self.assertEqual((status, headers["X-Voice"]), (200, "M5"))
-        self.request("/listen/settings", {"voice": None})
-        chunk(start(3), "Restore the configured Jarvic voice", voice="F4")
-        self.assertEqual(self.engine.voices, ["F2", "F2", "F2", "M3", "M5", "F4"])
+        chunk(first, "Still the same settings")
+        chunk(start(2), "Next response changes settings")
+        # Direct WAV requests (including the original GUI) keep their requested settings.
+        status, _, headers = self.request("/v1/speech", {
+            "input": "Direct speech", "voice": "M5", "language": "fr", "speed": 1.1,
+        })
+        self.assertEqual(
+            (status, headers["X-Voice"], headers["X-Language"], headers["X-Speed"]),
+            (200, "M5", "fr", "1.1"),
+        )
+        self.request("/listen/settings", {"language": None})
+        chunk(start(3), "Restore only the configured Jarvic language", voice="F4")
+        self.request("/listen/settings", {"voice": None, "speed": None})
+        chunk(start(4), "Restore all configured Jarvic settings", voice="F4")
+        self.assertEqual(
+            [(options["voice"], options["language"], options["speed"])
+             for options in self.engine.options],
+            [("F2", "de", .8)] * 3
+            + [("M3", "hi", 1.6), ("M5", "fr", 1.1), ("M3", "es", 1.6), ("F4", "es", 1.3)],
+        )
 
 
 if __name__ == "__main__":

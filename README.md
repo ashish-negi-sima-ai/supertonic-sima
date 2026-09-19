@@ -167,12 +167,14 @@ is available on `speech_server.py`; use port 8000 in both URLs for that server.
 The server must listen on `0.0.0.0` (the examples' default). No Python environment,
 audio player installation, or Jarvic client is needed on the laptop.
 
-Choose **Voice** on the listener page to use F1–F5 or M1–M5 for the next Jarvic
-response. All chunks of a response keep the same voice, even if you change the
-selection while it is speaking. **Use Jarvic voice** restores the voice configured
-in Jarvic's YAML or `--tts-voice` flag. The selection is shared across listeners,
-survives refreshing the page, and resets when Supertonic restarts. Direct speech
-requests and the original GUI keep using their own selected voices.
+Choose **Voice** (F1–F5 or M1–M5), **Language**, and **Speed** (0.7×–2.0×) on the
+listener page for the next Jarvic response. Language controls speech pronunciation;
+it does not translate Jarvic's text. All chunks of a response keep the same settings,
+even if you change them while it is speaking. **Use Jarvic voice**, **Use Jarvic
+language**, and clearing the speed field restore the corresponding defaults from
+Jarvic's YAML or CLI flags. Settings are shared across listeners, survive refreshing
+the page, and reset when Supertonic restarts. Direct speech requests and the original
+GUI keep using their own settings.
 
 Audio is delivered live to every browser that has enabled listening. **Stop**
 disconnects that browser and clears its audio queue. Joining or reconnecting does
@@ -204,10 +206,12 @@ generation, and stale requests/results return HTTP 202 with
 `{"superseded": true}` instead of emitting audio. Repeating the same current
 control request is idempotent; delayed older sequence numbers are ignored.
 
-`GET /listen/settings` returns the available voices and the shared selection.
-`POST /listen/settings` with `{"voice": "F2"}` changes that selection;
-`{"voice": null}` restores the client-provided voice. Settings are captured when
-a response begins with `/v1/speech/interrupt`; updates reach connected pages as
+`GET /listen/settings` returns the available voices, languages, speed bounds, and
+shared settings. `POST /listen/settings` accepts any non-empty subset of
+`{"voice": "F2", "language": "en", "speed": 1.2}`; omitted settings stay unchanged.
+Set any value to `null` to restore that client-provided setting. Invalid updates
+return HTTP 400 without changing any settings. Settings are captured when a
+response begins with `/v1/speech/interrupt`; updates reach connected pages as
 `settings` events and do not interrupt current speech.
 
 ## Compiled contracts
