@@ -27,6 +27,7 @@ button:disabled{opacity:.5;cursor:wait}.actions{display:grid;grid-template-colum
 #stop{background:#2a3341;color:#edf2f7}#status{min-height:1.5rem}
 @media(max-width:650px){.row{grid-template-columns:1fr 1fr}}
 </style></head><body><h1>Supertonic 3</h1><p>Hybrid ONNX Runtime + Modalix MLA speech synthesis.</p>
+<p><a href="/listen" style="color:#55c2ff">Listen to Jarvic speech on this device</a></p>
 <form id="form"><label>Text<textarea id="text">Hello from the SiMa Modalix DevKit.</textarea></label>
 <div class="row"><label>Voice<select id="voice"></select></label><label>Language<select id="language"></select></label>
 <label>Speed<input id="speed" type="number" min="0.7" max="2" step="0.1" value="1"></label>
@@ -282,6 +283,7 @@ def main() -> int:
         )
         server.daemon_threads = True
         print(f"gui=http://{args.host}:{args.port}/", flush=True)
+        print(f"listener=http://{args.host}:{args.port}/listen", flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:

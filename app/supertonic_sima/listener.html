@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Listen to Jarvic · Supertonic</title>
+<style>
+:root { color-scheme: dark; font-family: system-ui, sans-serif; background: #10131a; color: #edf2f7; }
+body { max-width: 660px; margin: 10vh auto; padding: 0 24px; }
+h1 { margin-bottom: .5rem; }
+p { color: #bec8d5; line-height: 1.6; }
+.panel { margin-top: 28px; padding: 24px; border-radius: 16px; background: #191e28; }
+label { display: block; margin-bottom: 8px; font-weight: 600; }
+select { font: inherit; padding: 10px 12px; border: 1px solid #3d4757; border-radius: 8px;
+  background: #111620; color: #edf2f7; min-width: 200px; max-width: 100%; }
+#voice-status { font-size: .9rem; margin: 8px 0 22px; }
+button { font: inherit; font-weight: 700; padding: 12px 20px; border: 0; border-radius: 8px; cursor: pointer; }
+#enable { background: #55c2ff; color: #07111a; }
+#stop { margin-left: 8px; background: #2a3341; color: #edf2f7; }
+button:disabled { opacity: .5; cursor: default; }
+#status { min-height: 1.6em; }
+#spoken { white-space: pre-wrap; overflow-wrap: anywhere; color: #edf2f7; }
+</style>
+</head>
+<body>
+<h1>Listen to Jarvic</h1>
+<p>Hear Jarvic through this device’s speakers while you chat in the Modalix terminal.</p>
+<div class="panel">
+  <label for="voice">Voice</label>
+  <select id="voice" disabled aria-describedby="voice-status">
+    <option value="">Loading voices…</option>
+  </select>
+  <p id="voice-status" role="status">Applies to the next response for every listener.</p>
+  <button id="enable">Enable audio</button>
+  <button id="stop" disabled>Stop</button>
+  <p id="status" role="status" aria-live="polite">Click Enable audio, then ask Jarvic a question.</p>
+  <p id="spoken"></p>
+</div>
+<p>Keep this page open. Speech is shared with every browser that has enabled audio.</p>
+<script>
+const enableButton = document.querySelector('#enable');
+const stopButton = document.querySelector('#stop');
+const status = document.querySelector('#status');
+const spoken = document.querySelector('#spoken');
+const voiceSelect = document.querySelector('#voice');
+const voiceStatus = document.querySelector('#voice-status');
+let voiceSettings = {voice: null, revision: -1};
+let context = null, events = null, generation = 0, scheduledUntil = 0, playbackVersion = 0;
+let pending = [], sources = new Set(), pumping = false;
+let speechGeneration = 0;
+
+function applyVoiceSettings(settings) {
+  if (!settings || settings.revision < voiceSettings.revision) return;
+  voiceSettings = {voice: settings.voice, revision: settings.revision};
+  voiceSelect.value = voiceSettings.voice ?? '';
+}
+
+async function loadVoices() {
+  try {
+    const response = await fetch('/listen/settings');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const settings = await response.json();
+    voiceSelect.replaceChildren(new Option('Use Jarvic voice', ''));
+    for (const voice of settings.voices) voiceSelect.add(new Option(voice, voice));
+    applyVoiceSettings(settings.revision >= voiceSettings.revision ? settings : voiceSettings);
+    voiceSelect.disabled = false;
+  } catch (error) {
+    voiceStatus.textContent = `Could not load voices: ${error.message}. Refresh to retry.`;
+  }
+}
+
+voiceSelect.onchange = async () => {
+  const voice = voiceSelect.value || null;
+  voiceSelect.disabled = true;
+  voiceStatus.textContent = 'Saving voice…';
+  try {
+    const response = await fetch('/listen/settings', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({voice}),
+    });
+    const settings = await response.json();
+    if (!response.ok) throw new Error(settings.error || `HTTP ${response.status}`);
+    applyVoiceSettings(settings);
+    voiceStatus.textContent = 'Voice saved. Applies to the next response for every listener.';
+  } catch (error) {
+    voiceSelect.value = voiceSettings.voice ?? '';
+    voiceStatus.textContent = `Could not save voice: ${error.message}`;
+  } finally {
+    voiceSelect.disabled = false;
+  }
+};
+void loadVoices();
+
+function clearPlayback() {
+  playbackVersion += 1;
+  pending = [];
+  scheduledUntil = 0;
+  for (const source of sources) {
+    try { source.stop(); } catch (_) {}
+  }
+  sources.clear();
+}
+
+function stopListening(message = 'Audio stopped. Click Enable audio to listen again.') {
+  generation += 1;
+  if (events) events.close();
+  events = null;
+  clearPlayback();
+  if (context) context.close().catch(() => {});
+  context = null;
+  enableButton.disabled = false;
+  stopButton.disabled = true;
+  status.textContent = message;
+}
+
+async function playPending(token) {
+  if (pumping) return;
+  pumping = true;
+  const audioContext = context;
+  try {
+    while (pending.length && token === generation) {
+      const item = pending.shift();
+      const version = playbackVersion;
+      const bytes = Uint8Array.from(atob(item.audio), char => char.charCodeAt(0));
+      let buffer;
+      try {
+        buffer = await audioContext.decodeAudioData(bytes.buffer);
+      } catch (error) {
+        if (version !== playbackVersion || token !== generation) continue;
+        throw error;
+      }
+      if (token !== generation) return;
+      if (version !== playbackVersion) continue;
+      if (audioContext.state !== 'running') {
+        stopListening('Audio was paused by the browser. Click Enable audio to resume.');
+        return;
+      }
+      // Bound scheduled audio as well as the queue of undecoded WAVs.
+      if (scheduledUntil - audioContext.currentTime + buffer.duration > 45) {
+        stopListening('Speech fell behind. Click Enable audio to hear new responses.');
+        return;
+      }
+      const source = audioContext.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioContext.destination);
+      const startAt = Math.max(scheduledUntil, audioContext.currentTime + .03);
+      sources.add(source);
+      source.onended = () => {
+        sources.delete(source);
+        source.disconnect();
+        if (token === generation && version === playbackVersion && sources.size === 0) {
+          status.textContent = 'Listening. Ask Jarvic another question.';
+        }
+      };
+      source.start(startAt);
+      scheduledUntil = startAt + buffer.duration;
+      spoken.textContent = item.text;
+      status.textContent = 'Playing Jarvic’s response…';
+    }
+  } catch (error) {
+    if (token === generation) stopListening(`Could not play audio: ${error.message}`);
+  } finally {
+    pumping = false;
+    // A new connection may have received audio while an old decode was finishing.
+    if (context && pending.length) void playPending(generation);
+  }
+}
+
+enableButton.onclick = async () => {
+  enableButton.disabled = true;
+  stopButton.disabled = false;
+  const token = ++generation;
+  try {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    context = new AudioContextClass();
+    await context.resume();
+    if (token !== generation) return;
+    status.textContent = 'Connecting…';
+    events = new EventSource('/listen/events');
+    events.addEventListener('ready', event => {
+      if (token !== generation) return;
+      const ready = JSON.parse(event.data);
+      speechGeneration = ready.generation;
+      applyVoiceSettings(ready.settings);
+      status.textContent = 'Listening. Ask Jarvic a question in your terminal.';
+    });
+    events.addEventListener('settings', event => {
+      if (token === generation) applyVoiceSettings(JSON.parse(event.data));
+    });
+    events.addEventListener('interrupt', event => {
+      if (token !== generation) return;
+      const update = JSON.parse(event.data);
+      const next = update.generation;
+      if (next < speechGeneration) return;
+      speechGeneration = next;
+      applyVoiceSettings(update.settings);
+      clearPlayback();
+      spoken.textContent = '';
+      status.textContent = 'Listening. Waiting for Jarvic’s new response…';
+    });
+    events.addEventListener('audio', event => {
+      if (token !== generation) return;
+      if (pending.length >= 8) {
+        stopListening('Speech fell behind. Click Enable audio to hear new responses.');
+        return;
+      }
+      try {
+        const item = JSON.parse(event.data);
+        if (item.generation !== speechGeneration) return;
+        pending.push(item);
+        void playPending(token);
+      } catch (_) {
+        stopListening('Received invalid audio. Click Enable audio to reconnect.');
+      }
+    });
+    events.addEventListener('reset', () => {
+      if (token === generation) stopListening('Listener disconnected. Click Enable audio to reconnect.');
+    });
+    events.onerror = () => {
+      if (token !== generation) return;
+      clearPlayback();
+      status.textContent = 'Connection lost. Reconnecting to Supertonic…';
+    };
+  } catch (error) {
+    if (token === generation) stopListening(`Could not enable audio: ${error.message}`);
+  }
+};
+stopButton.onclick = () => stopListening();
+window.addEventListener('pagehide', () => stopListening());
+</script>
+</body>
+</html>

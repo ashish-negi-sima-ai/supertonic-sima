@@ -151,6 +151,65 @@ Only WAV output is supported. Response headers include
 `X-Real-Time-Factor`, and `X-Latent-Length`. Requests are serialized around
 the persistent MLA runners.
 
+### Listen to Jarvic from a host browser
+
+Keep the Jarvic terminal client on Modalix and open
+`http://MODALIX_IP:8080/listen` on your laptop. Click **Enable audio** once and
+leave the page open. Then run on Modalix, from the Jarvic repository:
+
+```bash
+./scripts/devkit/start_jarvic_chat_client.sh --tts \
+  --tts-url http://127.0.0.1:8080 --tts-playback browser
+```
+
+Restart the Supertonic GUI after updating this repository. The same listener page
+is available on `speech_server.py`; use port 8000 in both URLs for that server.
+The server must listen on `0.0.0.0` (the examples' default). No Python environment,
+audio player installation, or Jarvic client is needed on the laptop.
+
+Choose **Voice** on the listener page to use F1–F5 or M1–M5 for the next Jarvic
+response. All chunks of a response keep the same voice, even if you change the
+selection while it is speaking. **Use Jarvic voice** restores the voice configured
+in Jarvic's YAML or `--tts-voice` flag. The selection is shared across listeners,
+survives refreshing the page, and resets when Supertonic restarts. Direct speech
+requests and the original GUI keep using their own selected voices.
+
+Audio is delivered live to every browser that has enabled listening. **Stop**
+disconnects that browser and clears its audio queue. Joining or reconnecting does
+not replay earlier speech. Browsers require the initial click to enable sound.
+The browser schedules WAV chunks in order while later chunks arrive. Slow
+listeners are disconnected when their bounded queues fill and can click
+Enable audio to resume with new speech.
+
+When Jarvic starts a new assistant response, it interrupts the previous speech
+on the first text delta. Queued and currently playing browser audio is flushed
+without disconnecting the listener. Any old chunk still being decoded or
+synthesized is discarded; the new response plays automatically. An inference
+call already running on Modalix finishes normally, so the next synthesis may
+wait for that call even though playback has already stopped.
+
+For integrations, `POST /v1/speech/broadcast` accepts the same text/voice/language
+payload as `/v1/speech`, synthesizes once, sends it to connected listeners, and
+returns `{"listeners": N}`. Without listeners it returns HTTP 409 before running
+inference. Model profile errors remain HTTP 400 so clients can split and retry.
+`GET /listen/events` carries audio as base64 WAV in server-sent events; `/health`
+includes `browser_listeners`. Ordinary `/v1/speech` requests continue returning
+WAV directly and are not broadcast.
+
+To replace a response, call `POST /v1/speech/interrupt` with a unique client
+`stream_id` and an increasing integer `sequence`, starting at 1. It returns a
+`generation` to include in every `/v1/speech/broadcast` chunk of that response.
+An `interrupt` event flushes each listener's queue. Audio events carry their
+generation, and stale requests/results return HTTP 202 with
+`{"superseded": true}` instead of emitting audio. Repeating the same current
+control request is idempotent; delayed older sequence numbers are ignored.
+
+`GET /listen/settings` returns the available voices and the shared selection.
+`POST /listen/settings` with `{"voice": "F2"}` changes that selection;
+`{"voice": null}` restores the client-provided voice. Settings are captured when
+a response begins with `/v1/speech/interrupt`; updates reach connected pages as
+`settings` events and do not interrupt current speech.
+
 ## Compiled contracts
 
 The vector estimator accepts eight contiguous FP32 tensors in this order:
