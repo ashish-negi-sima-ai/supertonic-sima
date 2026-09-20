@@ -214,6 +214,75 @@ return HTTP 400 without changing any settings. Settings are captured when a
 response begins with `/v1/speech/interrupt`; updates reach connected pages as
 `settings` events and do not interrupt current speech.
 
+### Run Supertonic and Jarvic on separate DevKits
+
+Supertonic can run on one Modalix DevKit while the entire Jarvic stack, including
+the terminal chat client, runs on another. Your laptop plays the audio through
+Supertonic's browser listener. Voice, language, speed, and interruption work the
+same way as when both applications run on one DevKit.
+
+Replace `TTS_DEVKIT_IP` with the Supertonic DevKit's IP address and
+`JARVIC_DEVKIT_IP` with the Jarvic DevKit's IP address.
+
+1. On the **Supertonic DevKit**, activate its existing Python environment and
+   retain the model path settings described above, then start:
+
+   ```bash
+   cd /workspace/GitHub/supertonic-sima
+   python app/examples/speech_server.py --host 0.0.0.0 --port 8000
+   ```
+
+   Wait until startup prints the `listening=` and `listener=` URLs.
+
+2. On the **Jarvic DevKit**, check that Supertonic is reachable, then start chat:
+
+   ```bash
+   curl -fsS http://TTS_DEVKIT_IP:8000/health
+
+   cd /workspace/GitHub/jarvic-framework-feature-sima_with_fpf
+   ./scripts/devkit/start_jarvic_chat_client.sh \
+     --tts --tts-url http://TTS_DEVKIT_IP:8000 \
+     --tts-playback browser
+   ```
+
+3. On your **laptop**, open `http://TTS_DEVKIT_IP:8000/listen`, click
+   **Enable audio**, and keep the page open while chatting.
+
+Use the port that Supertonic actually listens on in both the Jarvic URL and
+the browser URL. `speech_server.py` defaults to 8000; `gui.py` defaults to 8080.
+Binding to `0.0.0.0` accepts connections through both the DevKit's network address
+and localhost. Binding to a specific IP only accepts connections through that
+address.
+
+#### Relay through the laptop when the DevKits cannot reach each other
+
+Both DevKits being accessible from your laptop does not guarantee that they can
+reach each other. If they are on separate networks and the health check from the
+Jarvic DevKit fails, first confirm that your laptop can reach
+`http://TTS_DEVKIT_IP:8000/health`. Then run this SSH tunnel **on your laptop**:
+
+```bash
+ssh -N -o ExitOnForwardFailure=yes \
+  -R 127.0.0.1:18000:TTS_DEVKIT_IP:8000 \
+  sima@JARVIC_DEVKIT_IP
+```
+
+This opens port 18000 on the Jarvic DevKit's loopback interface. Requests to that
+port travel through SSH to your laptop, which connects to the Supertonic DevKit.
+Keep the laptop and SSH session running while using the relay.
+
+On the **Jarvic DevKit**, check the tunnel and use its local URL for TTS:
+
+```bash
+curl -fsS http://127.0.0.1:18000/health
+
+./scripts/devkit/start_jarvic_chat_client.sh \
+  --tts --tts-url http://127.0.0.1:18000 \
+  --tts-playback browser
+```
+
+The laptop's browser still opens `http://TTS_DEVKIT_IP:8000/listen` directly.
+
 ## Compiled contracts
 
 The vector estimator accepts eight contiguous FP32 tensors in this order:
